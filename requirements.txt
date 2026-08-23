@@ -1,3 +1,5 @@
 scikit-learn
 pyyaml
 numpy
+google-genai
+python-dotenv
