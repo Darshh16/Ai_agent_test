@@ -18,7 +18,27 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
+
+
+_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+
+def _strip_reasoning_trace(text: str | None) -> str | None:
+    """Some models -- reasoning-capable models served through a plain
+    chat-completions endpoint, e.g. certain Qwen/DeepSeek variants
+    available on Groq -- emit a visible <think>...</think> block ahead of
+    their actual answer instead of exposing reasoning through a separate
+    API field. Strip it here, once, at the provider-client boundary, so
+    every caller (agent.py's answer parsing, memory.py's query rewrite,
+    anything added later) always receives just the final text, regardless
+    of which model is configured. Found via real testing with
+    qwen/qwen3.6-27b on Groq -- see bug diary."""
+    if text is None:
+        return None
+    stripped = _THINK_BLOCK_RE.sub("", text).strip()
+    return stripped if stripped else text
 
 
 @dataclass
@@ -81,7 +101,7 @@ class GeminiClient(LLMClient):
                 fc = part.function_call
                 return LLMResponse(function_call={"name": fc.name, "args": dict(fc.args)})
 
-        return LLMResponse(text=response.text)
+        return LLMResponse(text=_strip_reasoning_trace(response.text))
 
 
 class GroqClient(LLMClient):
@@ -91,12 +111,18 @@ class GroqClient(LLMClient):
     loop), so this class's job is purely to translate that shape into
     OpenAI-style chat messages and translate the response back."""
 
-    def __init__(self, model: str = "qwen/qwen3.6-27b", api_key: str | None = None):
+    def __init__(self, model: str | None = None, api_key: str | None = None):
         from groq import Groq
 
         api_key = api_key or os.environ.get("GROQ_API_KEY")
         if not api_key:
             raise RuntimeError("GROQ_API_KEY is not set -- check your .env file")
+        # Model availability on Groq's free tier varies by account/region and
+        # changes over time as their catalog evolves -- don't hardcode one
+        # that might 404. Set GROQ_MODEL in .env to whichever model your
+        # account actually has access to (check console.groq.com/docs/models
+        # if unsure). Falls back to a reasonable default if unset.
+        model = model or os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
         self._client = Groq(api_key=api_key)
         self._model = model
 
@@ -163,4 +189,4 @@ class GroqClient(LLMClient):
                 "args": json.loads(tc.function.arguments),
             })
 
-        return LLMResponse(text=message.content)
+        return LLMResponse(text=_strip_reasoning_trace(message.content))
