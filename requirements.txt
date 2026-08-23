@@ -3,3 +3,4 @@ pyyaml
 numpy
 google-genai
 python-dotenv
+groq

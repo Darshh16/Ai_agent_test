@@ -163,6 +163,7 @@ def parse_response(raw_text: str) -> tuple[str, list[str], bool]:
 
     clean_answer = SOURCE_TAG_RE.sub("", text)
     clean_answer = re.sub(r"[ \t]+", " ", clean_answer)
+    clean_answer = re.sub(r"\s+([.,;:!?])", r"\1", clean_answer)  # drop space left before punctuation once the citation tag before it is removed
     clean_answer = re.sub(r"\n{3,}", "\n\n", clean_answer).strip()
 
     return clean_answer, sources, handoff
@@ -174,11 +175,27 @@ class Agent:
         self.order_tool = order_tool
         self.llm = llm
 
-    def handle_message(self, user_text: str, history: list[dict] | None = None) -> AgentResponse:
+    def handle_message(
+        self,
+        user_text: str,
+        history: list[dict] | None = None,
+        retrieval_query: str | None = None,
+    ) -> AgentResponse:
+        """`retrieval_query`, if provided, is used for the KB search instead
+        of `user_text` -- this is where a rewritten standalone version of a
+        follow-up question (see memory.py) plugs in. `user_text` is always
+        what's actually sent to the model as the user's turn; the rewrite is
+        purely a retrieval-time optimization, not a substitute for what the
+        user actually said."""
         history = history or []
-        trace: dict = {"user_message": user_text, "history_length": len(history)}
+        search_query = retrieval_query or user_text
+        trace: dict = {
+            "user_message": user_text,
+            "retrieval_query": search_query,
+            "history_length": len(history),
+        }
 
-        results = self.retriever.search(user_text, k=5)
+        results = self.retriever.search(search_query, k=5)
         conflict = self.retriever.detect_conflict(results)
         trace["retrieved"] = [
             {"filename": r.chunk.filename, "heading": r.chunk.heading, "score": r.score,
