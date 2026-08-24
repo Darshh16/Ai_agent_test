@@ -51,14 +51,19 @@ def test_log_entry_has_expected_fields():
 def test_log_file_is_valid_jsonl_and_appends():
     with tempfile.TemporaryDirectory() as tmp:
         log_path = Path(tmp) / "trace.jsonl"
-        log_turn("session-1", make_fake_response())
+        # All three calls pass log_path explicitly -- a prior version of
+        # this test omitted it on the first call, which silently fell
+        # through to the module's real default path (logs/trace.jsonl,
+        # relative to cwd) and polluted the actual application log with a
+        # fake test entry. See bug diary.
+        log_turn("session-1", make_fake_response(), log_path=log_path)
         log_turn("session-1", make_fake_response(), log_path=log_path)
         log_turn("session-1", make_fake_response(answer="A different answer."), log_path=log_path)
 
         lines = log_path.read_text(encoding="utf-8").strip().split("\n")
-        assert len(lines) == 2, "second and third calls should both append to the same file"
+        assert len(lines) == 3, "all three calls should append to the same file"
         parsed = [json.loads(line) for line in lines]
-        assert parsed[1]["answer"] == "A different answer."
+        assert parsed[2]["answer"] == "A different answer."
         print("PASS: test_log_file_is_valid_jsonl_and_appends")
 
 
