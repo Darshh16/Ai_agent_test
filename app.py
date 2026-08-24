@@ -29,6 +29,7 @@ from tools.order_lookup import OrderLookupTool  # noqa: E402
 from llm_client import GeminiClient, GroqClient  # noqa: E402
 from agent import Agent                   # noqa: E402
 from memory import SessionStore, rewrite_query  # noqa: E402
+from logging_utils import log_turn                # noqa: E402
 
 
 PROVIDER = os.environ.get("LLM_PROVIDER", "groq").lower()
@@ -103,6 +104,7 @@ if user_input:
 
     session.add_turn("user", user_input)
     session.add_turn("agent", result.answer)
+    log_turn(st.session_state.session_id, result, log_path=BASE_DIR / "logs" / "trace.jsonl")
 
     st.session_state.display_history.append({
         "role": "assistant",
