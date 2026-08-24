@@ -4,3 +4,4 @@ numpy
 google-genai
 python-dotenv
 groq
+streamlit
