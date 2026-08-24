@@ -134,10 +134,45 @@ def test_conflict_candidate_surfaced_in_context():
     print("PASS: test_conflict_candidate_surfaced_in_context")
 
 
+def test_handoff_fallback_catches_missed_marker():
+    # This is the actual real bug found in manual testing: the model gave a
+    # substantively correct conflict/handoff answer for the Breeze Tumbler
+    # question but didn't prefix it with the literal [HANDOFF] token.
+    primary = LLMResponse(text=(
+        "Our current documentation contains conflicting guidance on this. "
+        "One care guide states the body should be hand-washed, while the "
+        "product card states all components are dishwasher safe. I recommend "
+        "contacting our support team directly for a definitive answer."
+    ))
+    classifier = LLMResponse(text="YES")
+    agent, llm = make_agent([primary, classifier])
+
+    result = agent.handle_message("Can I put the entire Breeze Tumbler in the dishwasher?")
+
+    assert result.handoff is True, "fallback classifier should catch a missed [HANDOFF] marker"
+    assert result.trace["handoff_source"] == "fallback_classifier"
+    assert len(llm.calls) == 2, "expected the main answer call plus one fallback classification call"
+    print("PASS: test_handoff_fallback_catches_missed_marker")
+
+
+def test_handoff_fallback_not_triggered_on_plain_answers():
+    # A normal answer with none of the hint words should never trigger the
+    # extra classification call at all -- keeps the common case cheap.
+    agent, llm = make_agent([LLMResponse(text="Your order has shipped and is on its way.")])
+    result = agent.handle_message("Where is my order?")
+
+    assert result.handoff is False
+    assert result.trace["handoff_source"] == "none"
+    assert len(llm.calls) == 1, "fallback classifier must not fire when there's no hint of a handoff"
+    print("PASS: test_handoff_fallback_not_triggered_on_plain_answers")
+
+
 if __name__ == "__main__":
     test_direct_kb_answer_with_citation()
     test_tool_call_flow_and_trace_fields()
     test_handoff_token_parsed()
     test_tool_never_called_without_order_id()
     test_conflict_candidate_surfaced_in_context()
+    test_handoff_fallback_catches_missed_marker()
+    test_handoff_fallback_not_triggered_on_plain_answers()
     print("\nALL ORCHESTRATION PLUMBING TESTS PASSED")
