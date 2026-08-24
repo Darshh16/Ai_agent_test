@@ -111,6 +111,51 @@ draws on more than one document.
 """
 
 
+HANDOFF_CLASSIFIER_SYSTEM_PROMPT = """You determine whether a customer support response indicates that human \
+assistance should be recommended. Answer with exactly one word: YES or NO.
+
+Answer YES if the response does any of the following:
+- says sources, documents, or guidance conflict or are inconsistent
+- recommends contacting support, a specialist, or a human for confirmation
+- says it cannot confidently answer or doesn't have enough information
+- declines to perform an action (refund, cancellation, address change, etc.) and \
+suggests escalation
+
+Otherwise answer NO."""
+
+# Cheap local pre-filter so the fallback classifier call only fires when it
+# might actually be needed, not on every single answer. This is a recall
+# net, not a precision guarantee -- chosen against the real failure text
+# observed in testing (see bug diary): "conflicting guidance", "recommend
+# contacting our support team".
+_HANDOFF_HINT_WORDS = (
+    "recommend", "conflict", "inconsist", "human", "specialist",
+    "escalat", "unable to confirm", "cannot confirm", "reach out",
+    "contact our support", "contact support",
+)
+
+
+def _looks_like_it_might_need_handoff(text: str) -> bool:
+    lowered = text.lower()
+    return any(hint in lowered for hint in _HANDOFF_HINT_WORDS)
+
+
+def _classify_handoff_fallback(llm: LLMClient, answer_text: str) -> bool:
+    """Only called when the primary [HANDOFF] marker was absent but the
+    answer's language suggests it might have been warranted anyway -- a
+    safety net for exactly the failure mode found in real testing: the
+    model wrote a substantively correct conflict/handoff answer but didn't
+    literally prefix it with the marker. Fails safe to False (no handoff)
+    on any error, matching what the primary parse already concluded."""
+    try:
+        response = llm.generate(HANDOFF_CLASSIFIER_SYSTEM_PROMPT, [
+            {"role": "user", "parts": [{"text": answer_text}]}
+        ])
+        return (response.text or "").strip().upper().startswith("YES")
+    except Exception:
+        return False
+
+
 @dataclass
 class AgentResponse:
     answer: str
@@ -251,8 +296,14 @@ class Agent:
 
         raw_text = response.text or ""
         clean_answer, sources, handoff = parse_response(raw_text)
+        handoff_source = "primary_marker" if handoff else "none"
+
+        if not handoff and _looks_like_it_might_need_handoff(clean_answer):
+            handoff = _classify_handoff_fallback(self.llm, clean_answer)
+            handoff_source = "fallback_classifier" if handoff else "fallback_classifier_negative"
 
         trace["raw_final_response"] = raw_text
+        trace["handoff_source"] = handoff_source
         trace["decision"] = "handoff" if handoff else "answered"
 
         return AgentResponse(
