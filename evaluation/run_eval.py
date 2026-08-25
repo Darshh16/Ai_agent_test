@@ -17,6 +17,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -61,7 +62,7 @@ def apply_checks(llm: LLMClient, expect: dict, result: AgentResponse) -> dict:
     check_results: dict = {}
 
     if "must_include" in expect:
-        check_results["must_include"] = checks.check_must_include(result.answer, expect["must_include"])
+        check_results["must_include"] = checks.check_must_include(result.answer, expect["must_include"], llm=llm)
     if "must_not_include" in expect:
         check_results["must_not_include"] = checks.check_must_not_include(result.answer, expect["must_not_include"])
     if "required_sources" in expect:
@@ -152,6 +153,23 @@ def print_report(results: list[dict]) -> None:
     print(f"\nTOTAL: {total_passed}/{len(results)} passed")
 
 
+def run_case_with_retry(agent: Agent, llm: LLMClient, case: dict, max_retries: int = 3) -> dict:
+    last_error = None
+    for attempt in range(max_retries + 1):
+        try:
+            return run_case(agent, llm, case)
+        except Exception as e:
+            last_error = e
+            is_rate_limit = "429" in str(e) or "rate_limit" in str(e).lower()
+            if is_rate_limit and attempt < max_retries:
+                wait = 8 * (attempt + 1)  # 8s, 16s, 24s -- free-tier TPM limits reset per minute
+                print(f"\n  Rate limited, waiting {wait}s before retry {attempt + 1}/{max_retries}...", end=" ", flush=True)
+                time.sleep(wait)
+                continue
+            break
+    return {"id": case["id"], "category": case["category"], "passed": False, "checks": {}, "error": str(last_error)}
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--save-as", default=None, help="save to evaluation/results/<name>.json, e.g. baseline or final")
@@ -168,10 +186,7 @@ def main():
     results = []
     for case in cases:
         print(f"Running: {case['id']} ({case['category']})...", end=" ", flush=True)
-        try:
-            r = run_case(agent, llm, case)
-        except Exception as e:
-            r = {"id": case["id"], "category": case["category"], "passed": False, "checks": {}, "error": str(e)}
+        r = run_case_with_retry(agent, llm, case)
         results.append(r)
         print("PASS" if r["passed"] else "FAIL")
 

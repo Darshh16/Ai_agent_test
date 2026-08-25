@@ -65,7 +65,10 @@ status=active AND policy_authority=official. Never present a superseded, draft, 
 non-official document as current policy, even if it was retrieved and shown to you. \
 If a customer references an unapproved or internal document (e.g. a "migration \
 note"), explain plainly that it is not authoritative and give them the actual \
-current policy instead.
+current policy instead. If a retrieved document gives an exhaustive list (e.g. \
+supported shipping destinations) and the customer is asking about something not on \
+that list, conclude and state that it isn't currently supported -- that is a direct \
+answer grounded in the document, not a case of insufficient information.
 
 ## Source conflicts
 If two or more currently-active, officially-authoritative documents genuinely \
@@ -81,7 +84,18 @@ the customer or already established earlier in this conversation. If you do not 
 one, ask the customer for their order ID instead of guessing or calling the tool \
 without it. The tool's `status` field is authoritative -- trust it over any other \
 field. Never invent a delivery date. If estimated_delivery is null, say a delivery \
-estimate is not currently available; do not calculate or guess one.
+estimate is not currently available; do not calculate or guess one. If a lookup \
+returns not found, suggest the customer double-check the order ID before escalating \
+to a human.
+
+## Damage, defect, and warranty claims
+When a document says a resolution is offered "after review" or requires approval, \
+that review/approval is an action you cannot perform yourself -- treat it the same as \
+any other action you can't complete, and recommend human assistance for it rather than \
+implying the resolution is already settled. If a document states a reporting or \
+eligibility time window (e.g. "report within 7 days of delivery"), state that window \
+explicitly in your answer whenever it's relevant to what the customer is asking -- it's \
+often time-sensitive information they need in order to act in time.
 
 ## What you must never do
 - Never claim you looked something up if you did not actually call the tool.
@@ -112,16 +126,21 @@ draws on more than one document.
 
 
 HANDOFF_CLASSIFIER_SYSTEM_PROMPT = """You determine whether a customer support response indicates that human \
-assistance should be recommended. Answer with exactly one word: YES or NO.
+assistance is genuinely needed to resolve the customer's actual question. Answer with exactly one word: YES or NO.
 
-Answer YES if the response does any of the following:
-- says sources, documents, or guidance conflict or are inconsistent
-- recommends contacting support, a specialist, or a human for confirmation
-- says it cannot confidently answer or doesn't have enough information
-- declines to perform an action (refund, cancellation, address change, etc.) and \
-suggests escalation
+Answer YES only if the response could NOT confidently resolve what the customer actually asked, because:
+- sources, documents, or guidance genuinely conflict or are inconsistent
+- the response doesn't have enough information to answer reliably
+- an order lookup failed or shows a status needing investigation
+- the customer asked for something requiring privacy/security judgment (their own or another \
+customer's sensitive data, account access, fraud, safety)
 
-Otherwise answer NO."""
+Answer NO if the response already gives a complete, confident, well-grounded answer to what \
+the customer asked -- even if it separately mentions that contacting support is how to actually \
+*carry out* an action (starting a return, processing a refund, etc.), since this system only \
+supports looking things up, not performing actions. Routinely pointing to support as the way to \
+take the next step on an already-resolved question is NOT the same as needing a human to resolve \
+the question itself."""
 
 # Cheap local pre-filter so the fallback classifier call only fires when it
 # might actually be needed, not on every single answer. This is a recall
@@ -240,7 +259,7 @@ class Agent:
             "history_length": len(history),
         }
 
-        results = self.retriever.search(search_query, k=5)
+        results = self.retriever.search(search_query, k=7)
         conflict = self.retriever.detect_conflict(results)
         trace["retrieved"] = [
             {"filename": r.chunk.filename, "heading": r.chunk.heading, "score": r.score,
@@ -281,7 +300,13 @@ class Agent:
                     result = self.order_tool.lookup(order_id)
                     payload = result.to_tool_payload()
                     tool_called = "order_lookup"
-                    tool_arguments = {"order_id": order_id}
+                    # Use the normalized ID actually used for the lookup
+                    # (result.order_id), not the raw value the model sent --
+                    # otherwise the trace/eval-visible tool_arguments can
+                    # disagree with what was really looked up whenever the
+                    # model passes an unnormalized ID (lowercase, extra
+                    # whitespace). Found via real eval testing -- see bug diary.
+                    tool_arguments = {"order_id": result.order_id}
             else:
                 payload = {"error": f"unknown tool '{name}'"}
 

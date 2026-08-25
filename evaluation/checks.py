@@ -45,9 +45,27 @@ class CheckResult:
 # Deterministic checks
 # ---------------------------------------------------------------------
 
-def check_must_include(answer: str, phrases: list[str]) -> CheckResult:
-    missing = [p for p in phrases if p.lower() not in answer.lower()]
-    return CheckResult(passed=not missing, detail="ok" if not missing else f"missing: {missing}")
+def check_must_include(answer: str, phrases: list[str], llm: LLMClient | None = None) -> CheckResult:
+    """Literal substring match first (fast, fully deterministic, zero cost).
+    For any phrase that fails literally, and only if an llm is provided,
+    falls back to a judge call asking whether the *fact* is conveyed even
+    if worded differently -- found necessary via real eval testing, where
+    "45-calendar-day return window" correctly failed a literal match against
+    the expected phrase "45 calendar days" despite saying the same thing.
+    Without an llm, behaves as pure literal matching (e.g. for tests that
+    don't need the fallback)."""
+    missing_literal = [p for p in phrases if p.lower() not in answer.lower()]
+    if not missing_literal:
+        return CheckResult(passed=True, detail="ok")
+    if llm is None:
+        return CheckResult(passed=False, detail=f"missing: {missing_literal}")
+
+    questions = [f"Does the text convey this same fact, even if worded differently: {p}" for p in missing_literal]
+    judged = _judge_concepts(llm, answer, questions)
+    still_missing = [p for p, ok in zip(missing_literal, judged) if not ok]
+    if still_missing:
+        return CheckResult(passed=False, detail=f"missing (literal and paraphrase both failed): {still_missing}")
+    return CheckResult(passed=True, detail=f"ok (matched via paraphrase fallback: {missing_literal})")
 
 
 def check_must_not_include(answer: str, phrases: list[str]) -> CheckResult:

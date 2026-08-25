@@ -74,7 +74,7 @@ class Retriever:
             return NON_OFFICIAL_PENALTY
         return 1.0
 
-    def search(self, query: str, k: int = 5) -> list[RetrievedChunk]:
+    def search(self, query: str, k: int = 5, expand_siblings: bool = True) -> list[RetrievedChunk]:
         query_vec = self.vectorizer.transform([query])
         sims = cosine_similarity(query_vec, self.matrix)[0]
 
@@ -86,7 +86,41 @@ class Retriever:
             scored.append(RetrievedChunk(chunk=chunk, score=round(float(adjusted), 4)))
 
         scored.sort(key=lambda r: r.score, reverse=True)
-        return scored[:k]
+        top = scored[:k]
+
+        if not expand_siblings:
+            return top
+
+        # Sibling-section expansion: pull in the other sections of whichever
+        # file(s) most clearly dominate the top results, at a synthetic low
+        # score (never outranks a real match, but stays visible to the
+        # model). A customer asking about a topic usually benefits from the
+        # whole relevant document, not just whichever single section
+        # happened to score highest on raw lexical overlap -- found via real
+        # eval testing: a Canada shipping query matched "Supported
+        # destinations" and "Canada delivery estimate" but never "Duties and
+        # taxes", from the same file, because plain top-k scoring treats
+        # every section as fully independent.
+        #
+        # Deliberately limited to only the top 2 files by their best score,
+        # not every file with any presence in top-k -- expanding
+        # indiscriminately was found to drown a genuinely strong match in
+        # noise pulled from files that only weakly/coincidentally matched
+        # (e.g. a returns question that barely, incorrectly out-ranked into
+        # matching TrailPlus and international-shipping content shouldn't
+        # also pull in ALL of those files' unrelated sections).
+        file_best_score: dict[str, float] = {}
+        for r in top:
+            file_best_score[r.chunk.filename] = max(file_best_score.get(r.chunk.filename, 0.0), r.score)
+        dominant_files = {f for f, _ in sorted(file_best_score.items(), key=lambda kv: kv[1], reverse=True)[:2]}
+
+        already_included = {r.chunk.chunk_id for r in top}
+        siblings = [
+            RetrievedChunk(chunk=c, score=0.0)
+            for c in self.chunks
+            if c.filename in dominant_files and c.chunk_id not in already_included
+        ]
+        return top + siblings
 
     def detect_conflict(self, results: list[RetrievedChunk], relative_margin: float = 0.65) -> list[RetrievedChunk] | None:
         """If two or more top results are both citable authority, from

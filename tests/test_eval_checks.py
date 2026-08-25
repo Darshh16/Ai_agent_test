@@ -160,8 +160,41 @@ def test_concept_judge_fails_closed_on_bad_response():
     print("PASS: test_concept_judge_fails_closed_on_bad_response")
 
 
+def test_must_include_literal_match_needs_no_llm_call():
+    # No llm passed at all -- must not error, must behave as pure literal matching.
+    assert check_must_include("You have 30 days to return it.", ["30 days"]).passed
+    assert not check_must_include("You have some time.", ["30 days"]).passed
+    print("PASS: test_must_include_literal_match_needs_no_llm_call")
+
+
+def test_must_include_paraphrase_fallback():
+    # Real observed case: expected literal phrase "45 calendar days", actual
+    # answer said "45-calendar-day return window" -- same fact, different
+    # wording. Literal match fails; fallback judge call should catch it.
+    llm = ScriptedLLMClient([LLMResponse(text="[true]")])
+    result = check_must_include(
+        "You are eligible for a 45-calendar-day return window from delivery.",
+        ["45 calendar days"],
+        llm=llm,
+    )
+    assert result.passed, "paraphrase fallback should recognize this as the same fact"
+
+    # And confirm it still correctly FAILS when the fact really is wrong,
+    # not just differently worded.
+    llm_wrong = ScriptedLLMClient([LLMResponse(text="[false]")])
+    result_wrong = check_must_include(
+        "You are eligible for a 30-day return window from delivery.",
+        ["45 calendar days"],
+        llm=llm_wrong,
+    )
+    assert not result_wrong.passed, "fallback must still fail when the underlying fact is actually wrong"
+    print("PASS: test_must_include_paraphrase_fallback")
+
+
 if __name__ == "__main__":
     test_must_include_pass_and_fail()
+    test_must_include_literal_match_needs_no_llm_call()
+    test_must_include_paraphrase_fallback()
     test_must_not_include_pass_and_fail()
     test_required_sources()
     test_forbidden_sources_as_authority()

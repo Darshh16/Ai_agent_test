@@ -167,6 +167,23 @@ def test_handoff_fallback_not_triggered_on_plain_answers():
     print("PASS: test_handoff_fallback_not_triggered_on_plain_answers")
 
 
+def test_tool_arguments_are_normalized_even_if_model_sends_raw_input():
+    # Real bug found via eval testing: the model sent {"order_id": "ord-1007"}
+    # (lowercase). The lookup itself normalizes internally and succeeds, but
+    # the OLD code recorded the model's raw unnormalized value in
+    # tool_arguments instead of what was actually looked up.
+    first = LLMResponse(function_call={"name": "order_lookup", "args": {"order_id": "  ord-1007  "}})
+    second = LLMResponse(text="Your order has shipped with UPS.")
+    agent, llm = make_agent([first, second])
+
+    result = agent.handle_message("check on  ord-1007  for me")
+
+    assert result.tool_arguments == {"order_id": "ORD-1007"}, (
+        f"tool_arguments must reflect the normalized ID actually used for lookup, got {result.tool_arguments}"
+    )
+    print("PASS: test_tool_arguments_are_normalized_even_if_model_sends_raw_input")
+
+
 if __name__ == "__main__":
     test_direct_kb_answer_with_citation()
     test_tool_call_flow_and_trace_fields()
@@ -175,4 +192,5 @@ if __name__ == "__main__":
     test_conflict_candidate_surfaced_in_context()
     test_handoff_fallback_catches_missed_marker()
     test_handoff_fallback_not_triggered_on_plain_answers()
+    test_tool_arguments_are_normalized_even_if_model_sends_raw_input()
     print("\nALL ORCHESTRATION PLUMBING TESTS PASSED")
