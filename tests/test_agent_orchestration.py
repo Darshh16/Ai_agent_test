@@ -149,9 +149,9 @@ def test_handoff_fallback_catches_missed_marker():
 
     result = agent.handle_message("Can I put the entire Breeze Tumbler in the dishwasher?")
 
-    assert result.handoff is True, "fallback classifier should catch a missed [HANDOFF] marker"
-    assert result.trace["handoff_source"] == "fallback_classifier"
-    assert len(llm.calls) == 2, "expected the main answer call plus one fallback classification call"
+    assert result.handoff is True, "source conflict should trigger deterministic handoff"
+    assert result.trace["handoff_source"] == "source_conflict"
+    assert len(llm.calls) == 1, "conflict handoff is determined from retrieved evidence without a second LLM call"
     print("PASS: test_handoff_fallback_catches_missed_marker")
 
 
@@ -163,7 +163,7 @@ def test_handoff_fallback_not_triggered_on_plain_answers():
 
     assert result.handoff is False
     assert result.trace["handoff_source"] == "none"
-    assert len(llm.calls) == 1, "fallback classifier must not fire when there's no hint of a handoff"
+    assert len(llm.calls) == 0, "missing-order requests are handled before the model is called"
     print("PASS: test_handoff_fallback_not_triggered_on_plain_answers")
 
 

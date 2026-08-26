@@ -1,3 +1,4 @@
+import json
 """
 Tests apply_checks() (the check-assembly logic in run_eval.py) against
 synthetic AgentResponse objects for several real case `expect` blocks --

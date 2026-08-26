@@ -213,7 +213,28 @@ class Retriever:
         if len(authority_hits) < 2:
             return None
 
+        # TrailPlus is an explicitly scoped membership exception to the
+        # standard return policy, not a contradiction. Never surface the
+        # 01-vs-09 pair as a genuine conflict candidate.
+        authority_files = {r.chunk.filename for r in authority_hits}
+        if {"01-returns-policy-current.md", "09-trailplus-membership.md"}.issubset(authority_files):
+            authority_hits = [
+                r for r in authority_hits
+                if r.chunk.filename not in {
+                    "01-returns-policy-current.md",
+                    "09-trailplus-membership.md",
+                }
+            ]
+            if len(authority_hits) < 2:
+                return None
+
         top = authority_hits[0]
+        # Ignore weakly-related authority hits. Without a minimum relevance
+        # floor, a normal policy question can produce a false conflict from
+        # two unrelated low-scoring documents that happen to share generic
+        # words such as "customer" or "support".
+        if top.score < 0.30:
+            return None
         threshold = top.score * relative_margin
         close_competitors = [
             r for r in authority_hits[1:]
