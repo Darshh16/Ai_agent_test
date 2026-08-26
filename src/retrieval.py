@@ -25,12 +25,79 @@ Precedence handling:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
-from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS, TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 from ingest import Chunk, load_knowledge_base
+
+
+_TOKEN_RE = re.compile(r"[a-zA-Z]+")
+
+
+def _stem_once(word: str) -> str:
+    if len(word) <= 4:
+        return word
+    if word.endswith("ing") and len(word) - 3 >= 3:
+        stem = word[:-3]
+        # handle doubled consonant: "shipping" -> "shipp" -> "ship"
+        if len(stem) >= 2 and stem[-1] == stem[-2] and stem[-1] not in "aeiou":
+            stem = stem[:-1]
+        return stem
+    if word.endswith("ies") and len(word) - 3 >= 3:
+        return word[:-3] + "y"
+    if word.endswith("ed") and len(word) - 2 >= 3:
+        stem = word[:-2]
+        # same doubled-consonant handling: "cancelled" -> "cancell" -> "cancel"
+        if len(stem) >= 2 and stem[-1] == stem[-2] and stem[-1] not in "aeiou":
+            stem = stem[:-1]
+        return stem
+    for suffix in ("es", "s"):
+        if word.endswith(suffix) and len(word) - len(suffix) >= 3:
+            return word[: -len(suffix)]
+    return word
+
+
+def _simple_stem(word: str) -> str:
+    """Extremely lightweight suffix-stripping -- not a linguistically
+    complete stemmer, but enough to unify the common inflections that
+    actually matter for this corpus (ship/ships/shipping,
+    return/returns/returned/returning) without adding an NLP library
+    dependency for a 14-document corpus.
+
+    Applied to a fixed point (repeated until stable) rather than a single
+    pass: a single pass left words like "nevertheless" only partially
+    reduced, so re-stemming an already-stemmed word (which sklearn's own
+    internal consistency check does when validating the stop-word list)
+    produced a further-reduced form not in the precomputed stop-word set --
+    silently breaking stop-word filtering for a handful of words. A single
+    pass strictly shortens or leaves the word unchanged, so this loop is
+    guaranteed to terminate.
+
+    Found necessary via real eval testing: a real user question used the
+    bare verb "ship", which never appears in the knowledge base at all
+    (only "shipping"/"ships" do) -- causing cosine similarity of exactly
+    zero against every chunk, a complete retrieval miss rather than just a
+    ranking issue. See bug diary."""
+    stemmed = _stem_once(word)
+    while stemmed != word:
+        word = stemmed
+        stemmed = _stem_once(word)
+    return stemmed
+
+
+def _stemming_tokenizer(text: str) -> list[str]:
+    return [_simple_stem(t) for t in _TOKEN_RE.findall(text.lower())]
+
+
+# sklearn's built-in English stop-word list is matched against tokens
+# *after* our custom tokenizer runs -- but our stemmer transforms some stop
+# words too (e.g. "always" -> "alway"), so comparing stemmed tokens against
+# an unstemmed stop-word list silently fails to filter them. Stem the
+# stop-word list itself so the comparison stays consistent.
+_STEMMED_STOP_WORDS = list({_simple_stem(w) for w in ENGLISH_STOP_WORDS})
 
 
 AUTHORITY_BOOST = 1.25   # active + official
@@ -58,7 +125,13 @@ class Retriever:
             f"{c.title} {c.heading} {c.heading} {c.heading} {c.text}"
             for c in chunks
         ]
-        self.vectorizer = TfidfVectorizer(stop_words="english", ngram_range=(1, 2))
+        self.vectorizer = TfidfVectorizer(
+            tokenizer=_stemming_tokenizer,
+            lowercase=False,  # tokenizer already lowercases
+            token_pattern=None,  # silence sklearn's warning about token_pattern being ignored
+            stop_words=_STEMMED_STOP_WORDS,
+            ngram_range=(1, 2),
+        )
         self.matrix = self.vectorizer.fit_transform(corpus)
 
     @classmethod

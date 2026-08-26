@@ -131,11 +131,22 @@ def _judge_concepts(llm: LLMClient, answer: str, questions: list[str]) -> list[b
             {"role": "user", "parts": [{"text": prompt}]}
         ])
         raw = (response.text or "").strip()
+        # Defensive: some models wrap JSON output in a markdown code fence
+        # despite being told not to (e.g. "```json\n[true, false]\n```").
+        # Strip fences before parsing rather than letting this silently
+        # fail closed on every question in the batch -- found as the likely
+        # cause of a real eval run where a clearly-satisfied concept was
+        # judged false across an entire case. See bug diary.
+        if raw.startswith("```"):
+            raw = raw.strip("`")
+            if raw.lower().startswith("json"):
+                raw = raw[4:]
+            raw = raw.strip()
         values = json.loads(raw)
         if len(values) != len(questions):
             raise ValueError(f"expected {len(questions)} answers, got {len(values)}")
         return [bool(v) for v in values]
-    except Exception as e:
+    except Exception:
         # Fail closed: an unparseable judge response counts as "unknown",
         # which we treat as failing every question in the batch rather than
         # silently passing.

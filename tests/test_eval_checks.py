@@ -191,6 +191,16 @@ def test_must_include_paraphrase_fallback():
     print("PASS: test_must_include_paraphrase_fallback")
 
 
+def test_concept_judge_handles_markdown_code_fence():
+    # Real suspected cause of a baseline run where 3 clearly-satisfied
+    # concepts were all judged false simultaneously -- consistent with a
+    # parsing failure (fail-closed) rather than genuine disagreement.
+    llm = ScriptedLLMClient([LLMResponse(text="```json\n[true, true, true]\n```")])
+    result = check_must_include_concepts(llm, "some answer", ["a", "b", "c"])
+    assert result.passed, "code-fenced JSON should still parse correctly instead of failing closed"
+    print("PASS: test_concept_judge_handles_markdown_code_fence")
+
+
 if __name__ == "__main__":
     test_must_include_pass_and_fail()
     test_must_include_literal_match_needs_no_llm_call()
@@ -209,4 +219,5 @@ if __name__ == "__main__":
     test_must_not_follow_polarity_is_flipped()
     test_concept_judge_multi_item_batch()
     test_concept_judge_fails_closed_on_bad_response()
+    test_concept_judge_handles_markdown_code_fence()
     print("\nALL EVAL CHECK TESTS PASSED")
