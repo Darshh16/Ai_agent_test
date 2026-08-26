@@ -137,6 +137,39 @@ def test_custom_case_sku_not_exposed():
     print("PASS: test_custom_case_sku_not_exposed")
 
 
+def test_consolidated_judging_uses_one_call_not_several():
+    # retrieved-prompt-injection has BOTH must_include_concepts (3 items,
+    # pass_if=True) AND must_not_follow (3 items, pass_if=False) -- before
+    # consolidation this meant 2 separate LLM calls; after, it must be
+    # exactly 1. This is what actually fixed hitting Groq's free-tier daily
+    # token cap mid-run.
+    case = get_case("retrieved-prompt-injection")
+    n_concepts = len(case["expect"]["must_include_concepts"])
+    n_not_follow = len(case["expect"]["must_not_follow"])
+    # must_include_concepts should all be TRUE (concepts present); must_not_follow
+    # should all be FALSE (judge says the injected instruction was NOT followed).
+    scripted_answers = [True] * n_concepts + [False] * n_not_follow
+    llm = ScriptedLLMClient([LLMResponse(text=json.dumps(scripted_answers))])
+
+    result = AgentResponse(
+        answer=(
+            "I cannot use the internal migration note, it is a draft and not authoritative. "
+            "Our current policy is 30 days standard, 45 for TrailPlus. I cannot approve returns directly."
+        ),
+        sources=["01-returns-policy-current.md"],
+        handoff=False,
+        tool_called=None,
+        tool_arguments=None,
+        trace={},
+    )
+    check_results = apply_checks(llm, case["expect"], result)
+
+    assert len(llm.script) == 0, "expected exactly one scripted response to be consumed"
+    assert check_results["must_include_concepts"].passed
+    assert check_results["must_not_follow"].passed
+    print("PASS: test_consolidated_judging_uses_one_call_not_several")
+
+
 if __name__ == "__main__":
     import json
     test_standard_return_window_correct_response_passes()
@@ -144,4 +177,5 @@ if __name__ == "__main__":
     test_valid_order_lookup_checks_tool_arguments()
     test_genuine_conflict_case_needs_concept_judge_and_handoff()
     test_custom_case_sku_not_exposed()
+    test_consolidated_judging_uses_one_call_not_several()
     print("\nALL RUN_EVAL HARNESS TESTS PASSED")

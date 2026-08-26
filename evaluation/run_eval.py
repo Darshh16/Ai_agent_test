@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -62,7 +63,14 @@ def apply_checks(llm: LLMClient, expect: dict, result: AgentResponse) -> dict:
     check_results: dict = {}
 
     if "must_include" in expect:
-        check_results["must_include"] = checks.check_must_include(result.answer, expect["must_include"], llm=llm)
+        check_results["must_include"] = checks.check_must_include(result.answer, expect["must_include"], llm=None)
+        # Note: literal matching only here. If it fails, the paraphrase
+        # fallback is handled below via batch_judge_case instead of calling
+        # check_must_include's own llm-fallback path -- keeps every concept-
+        # style judge call for this case consolidated into one request
+        # instead of several, since each separate call was found to burn
+        # through Groq's free-tier daily token cap far faster than
+        # necessary on a full 20-case run. See bug diary.
     if "must_not_include" in expect:
         check_results["must_not_include"] = checks.check_must_not_include(result.answer, expect["must_not_include"])
     if "required_sources" in expect:
@@ -81,20 +89,23 @@ def apply_checks(llm: LLMClient, expect: dict, result: AgentResponse) -> dict:
         check_results["must_not_silently_choose_one"] = checks.check_must_not_silently_choose_one(
             result.handoff, expect["must_not_silently_choose_one"]
         )
-    if "must_include_concepts" in expect:
-        check_results["must_include_concepts"] = checks.check_must_include_concepts(
-            llm, result.answer, expect["must_include_concepts"]
-        )
-    if "must_ask_for" in expect:
-        check_results["must_ask_for"] = checks.check_must_ask_for(llm, result.answer, expect["must_ask_for"])
-    if "must_refuse_to_disclose" in expect:
-        check_results["must_refuse_to_disclose"] = checks.check_must_refuse_to_disclose(
-            llm, result.answer, expect["must_refuse_to_disclose"]
-        )
-    if "must_not_invent" in expect:
-        check_results["must_not_invent"] = checks.check_must_not_invent(llm, result.answer, expect["must_not_invent"])
-    if "must_not_follow" in expect:
-        check_results["must_not_follow"] = checks.check_must_not_follow(llm, result.answer, expect["must_not_follow"])
+
+    # Everything semantic (the concept-judge-backed fields, plus a
+    # paraphrase-fallback retry for any must_include phrase that failed
+    # literal matching) goes through ONE combined judge call.
+    missing_literal = []
+    if "must_include" in check_results and not check_results["must_include"].passed:
+        # Re-derive exactly which phrases failed literally, to hand to the
+        # batched judge instead of letting check_must_include make its own
+        # separate call.
+        missing_literal = [p for p in expect["must_include"] if p.lower() not in result.answer.lower()]
+
+    batched = checks.batch_judge_case(llm, result.answer, expect, missing_literal_include=missing_literal)
+    if missing_literal and "must_include" in batched:
+        check_results["must_include"] = batched["must_include"]
+    for field in ("must_include_concepts", "must_ask_for", "must_refuse_to_disclose", "must_not_invent", "must_not_follow"):
+        if field in batched:
+            check_results[field] = batched[field]
 
     return check_results
 
@@ -153,20 +164,42 @@ def print_report(results: list[dict]) -> None:
     print(f"\nTOTAL: {total_passed}/{len(results)} passed")
 
 
-def run_case_with_retry(agent: Agent, llm: LLMClient, case: dict, max_retries: int = 3) -> dict:
+_WAIT_TIME_RE = re.compile(r"try again in (?:(\d+)m)?([\d.]+)s", re.IGNORECASE)
+
+
+def run_case_with_retry(agent: Agent, llm: LLMClient, case: dict, max_retries: int = 2) -> dict:
     last_error = None
     for attempt in range(max_retries + 1):
         try:
             return run_case(agent, llm, case)
         except Exception as e:
             last_error = e
-            is_rate_limit = "429" in str(e) or "rate_limit" in str(e).lower()
-            if is_rate_limit and attempt < max_retries:
-                wait = 8 * (attempt + 1)  # 8s, 16s, 24s -- free-tier TPM limits reset per minute
-                print(f"\n  Rate limited, waiting {wait}s before retry {attempt + 1}/{max_retries}...", end=" ", flush=True)
-                time.sleep(wait)
-                continue
-            break
+            error_text = str(e)
+            is_rate_limit = "429" in error_text or "rate_limit" in error_text.lower()
+            if not is_rate_limit or attempt >= max_retries:
+                break
+
+            is_daily_limit = "tokens per day" in error_text.lower() or "TPD" in error_text
+            match = _WAIT_TIME_RE.search(error_text)
+            if match:
+                minutes, seconds = match.groups()
+                wait = int(minutes or 0) * 60 + float(seconds) + 2  # +2s buffer
+            else:
+                wait = 8 * (attempt + 1)
+
+            if is_daily_limit and wait > 60:
+                # A daily cap won't be fixed by hammering short retries --
+                # respect the provider's own suggested wait exactly, once,
+                # rather than retrying on our fixed 8/16/24s schedule which
+                # is meaningless against a multi-minute daily reset. If it's
+                # a long wait, tell the user plainly instead of blocking
+                # silently for many minutes.
+                print(f"\n  Daily token limit hit. Provider suggests waiting {wait:.0f}s. "
+                      f"Waiting once, then giving up on this case if still limited...", end=" ", flush=True)
+            else:
+                print(f"\n  Rate limited, waiting {wait:.0f}s before retry {attempt + 1}/{max_retries}...", end=" ", flush=True)
+            time.sleep(min(wait, 90))  # cap the wait so one case can't stall the whole run for 15+ minutes
+            continue
     return {"id": case["id"], "category": case["category"], "passed": False, "checks": {}, "error": str(last_error)}
 
 

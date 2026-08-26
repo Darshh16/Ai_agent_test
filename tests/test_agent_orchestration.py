@@ -184,6 +184,26 @@ def test_tool_arguments_are_normalized_even_if_model_sends_raw_input():
     print("PASS: test_tool_arguments_are_normalized_even_if_model_sends_raw_input")
 
 
+def test_handoff_marker_detected_when_not_at_start():
+    # Real observed bug: the model wrote a complete answer, then appended a
+    # second paragraph starting with [HANDOFF] instead of prefixing the
+    # whole message with it. The old startswith()-only check missed this.
+    real_observed_text = (
+        "That's a great question, but I'm not able to confirm the materials "
+        "composition of our bags based on the information available to me. "
+        "I'd recommend reaching out to one of our human support specialists.\n\n"
+        "[HANDOFF] I don't have material or ingredient composition information "
+        "in my available documentation, so I can't confirm whether all fabrics "
+        "and adhesives in our bags are vegan."
+    )
+    agent, llm = make_agent([LLMResponse(text=real_observed_text)])
+    result = agent.handle_message("Are all fabrics and adhesives in your bags vegan?")
+
+    assert result.handoff is True, "marker must be detected even when not at the very start"
+    assert "[HANDOFF]" not in result.answer, "the literal token must never reach the customer-facing answer"
+    print("PASS: test_handoff_marker_detected_when_not_at_start")
+
+
 if __name__ == "__main__":
     test_direct_kb_answer_with_citation()
     test_tool_call_flow_and_trace_fields()
@@ -193,4 +213,5 @@ if __name__ == "__main__":
     test_handoff_fallback_catches_missed_marker()
     test_handoff_fallback_not_triggered_on_plain_answers()
     test_tool_arguments_are_normalized_even_if_model_sends_raw_input()
+    test_handoff_marker_detected_when_not_at_start()
     print("\nALL ORCHESTRATION PLUMBING TESTS PASSED")

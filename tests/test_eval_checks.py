@@ -201,6 +201,17 @@ def test_concept_judge_handles_markdown_code_fence():
     print("PASS: test_concept_judge_handles_markdown_code_fence")
 
 
+def test_concept_judge_handles_preamble_before_json_array():
+    # Real observed failure: a second model produced a different
+    # non-compliant format than the markdown-fence case -- a sentence
+    # before the array instead of fences around it.
+    llm = ScriptedLLMClient([LLMResponse(text="Here are the results: [true, true, false]")])
+    result = check_must_include_concepts(llm, "some answer", ["a", "b", "c"])
+    assert not result.passed  # third item is false
+    assert "c" in result.detail
+    print("PASS: test_concept_judge_handles_preamble_before_json_array")
+
+
 if __name__ == "__main__":
     test_must_include_pass_and_fail()
     test_must_include_literal_match_needs_no_llm_call()
@@ -220,4 +231,5 @@ if __name__ == "__main__":
     test_concept_judge_multi_item_batch()
     test_concept_judge_fails_closed_on_bad_response()
     test_concept_judge_handles_markdown_code_fence()
+    test_concept_judge_handles_preamble_before_json_array()
     print("\nALL EVAL CHECK TESTS PASSED")
