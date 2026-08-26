@@ -710,7 +710,7 @@ A short walkthrough demonstrating:
 4. **Prompt-injection protection** and correct refusal/handoff
 5. **20/20 automated evaluation** result
 
-▶**[Watch the Demo Video](https://drive.google.com/file/d/15GDTjyg48VLUR4ld_gOXsTVRVCkOv_zk/view?usp=sharing)**
+▶[Watch the Demo Video](https://drive.google.com/file/d/15GDTjyg48VLUR4ld_gOXsTVRVCkOv_zk/view?usp=sharing)
 
 ---
 
